@@ -4,3 +4,32 @@
 
 # LangGraph
 .langgraph_api/
+.env
+wbot/
+.claude/
+CLAUDE.md
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Chroma / vector db persistence
+chroma_db/
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE / OS
+.vscode/
+.DS_Store
+
+# test / notebook caches
+.pytest_cache/
+.ipynb_checkpoints/
+
+# packaging
+*.egg-info/
+build/
+dist/

@@ -1,2 +1,4 @@
 # Warren_Botffett-
-a langchain RAG implement.
+
+Minimal LangChain RAG implementation for Buffett letters.
+
