@@ -2,57 +2,56 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from src.ingest import load_letter_documents
-from src.index import build_vector_store, load_vector_store, split_documents
-from src.qa import answer_question
+from src.index import (
+    DEFAULT_COLLECTION_NAME,
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_MILVUS_URI,
+    collection_exists,
+    load_vector_store,
+)
+from src.qa import DEFAULT_LLM_MODEL, answer_question
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_DATA_FILE = ROOT / "data" / "letters.txt"
-DEFAULT_DB_DIR = ROOT / "chroma_db"
 
 
 def _configure_api_key() -> None:
     load_dotenv()
 
-    google_api_key = (
-        os.getenv("GOOGLE_API_KEY")
-        or os.getenv("GEMINI_API_KEY")
-        or os.getenv("gemini_api_key")
+    nvidia_api_key = (
+        os.getenv("NVIDIA_API_KEY")
+        or os.getenv("nvidia_api_key")
+        or os.getenv("nvidia_kimi_api_key")
     )
 
-    if not google_api_key:
+    if not nvidia_api_key:
         raise EnvironmentError(
-            "Missing API key. Please set GOOGLE_API_KEY, GEMINI_API_KEY, or gemini_api_key in .env"
+            "Missing API key. Please set NVIDIA_API_KEY (or nvidia_kimi_api_key) in .env"
         )
 
-    os.environ["GOOGLE_API_KEY"] = google_api_key
-
-
-def _build_index_if_needed(
-    data_file: Path,
-    db_dir: Path,
-    embedding_model: str,
-    rebuild: bool,
-) -> None:
-    if db_dir.exists() and not rebuild:
-        return
-
-    docs = load_letter_documents(data_file)
-    chunks = split_documents(docs)
-    build_vector_store(
-        chunks=chunks,
-        persist_directory=db_dir,
-        embedding_model=embedding_model,
-    )
+    os.environ["NVIDIA_API_KEY"] = nvidia_api_key
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Warren Botffett RAG CLI")
+    parser = argparse.ArgumentParser(description="Warren Botffett RAG CLI (query only)")
     parser.add_argument("--query", required=True, help="Question to ask")
+    parser.add_argument("--mode", choices=["rag", "agent"], default="rag")
+    parser.add_argument("--k", type=int, default=5, help="Top-K chunks to retrieve")
+    parser.add_argument("--milvus-uri", default=DEFAULT_MILVUS_URI)
+    parser.add_argument("--collection-name", default=DEFAULT_COLLECTION_NAME)
+    parser.add_argument(
+        "--embedding-model",
+        default=DEFAULT_EMBEDDING_MODEL,
+        help="Must match the model used to build the collection.",
+    )
+    parser.add_argument("--llm-model", default=DEFAULT_LLM_MODEL)
+    parser.add_argument("--year", type=int)
+    parser.add_argument("--start-year", type=int)
+    parser.add_argument("--end-year", type=int)
     return parser.parse_args()
 
 
@@ -60,15 +59,18 @@ def main() -> None:
     args = parse_args()
     _configure_api_key()
 
-    _build_index_if_needed(
-        data_file=args.data_file,
-        db_dir=args.db_dir,
-        embedding_model=args.embedding_model,
-        rebuild=args.rebuild,
-    )
+    if not collection_exists(args.milvus_uri, args.collection_name):
+        print(
+            f"Collection '{args.collection_name}' not found at {args.milvus_uri}.\n"
+            f"Build it first:\n"
+            f"  python build_index.py --collection-name {args.collection_name}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     vector_store = load_vector_store(
-        persist_directory=args.db_dir,
+        uri=args.milvus_uri,
+        collection_name=args.collection_name,
         embedding_model=args.embedding_model,
     )
 

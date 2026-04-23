@@ -3,12 +3,12 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from langchain.agents import create_agent
-from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_milvus import Milvus
+from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 SYSTEM_PROMPT = (
     "You are an expert familiar with Warren Buffett's investment philosophy. "
@@ -16,43 +16,51 @@ SYSTEM_PROMPT = (
     "If the content does not contain the answer, please reply directly: botffet dont know."
 )
 
+DEFAULT_LLM_MODEL = "moonshotai/kimi-k2-instruct"
+
 
 def _build_filter(
     year: Optional[int] = None,
     start_year: Optional[int] = None,
     end_year: Optional[int] = None,
-) -> Optional[Dict[str, Any]]:
+) -> Optional[str]:
+    """Build a Milvus boolean expression string for the year metadata field.
+
+    Returns None when no constraints are given. Raises if --year is combined
+    with --start-year/--end-year.
+    """
     if year is not None and (start_year is not None or end_year is not None):
         raise ValueError("--year cannot be combined with --start-year/--end-year")
 
     if year is not None:
-        return {"year": year}
+        return f"year == {year}"
 
-    if start_year is not None and end_year is not None:
-        return {"$and": [{"year": {"$gte": start_year}}, {"year": {"$lte": end_year}}]}
+    clauses = []
     if start_year is not None:
-        return {"year": {"$gte": start_year}}
+        clauses.append(f"year >= {start_year}")
     if end_year is not None:
-        return {"year": {"$lte": end_year}}
+        clauses.append(f"year <= {end_year}")
 
-    return None
+    if not clauses:
+        return None
+    return " && ".join(clauses)
 
 
 def answer_question(
-    vector_store: Chroma,
+    vector_store: Milvus,
     query: str,
-    llm_model: str = "gemini-1.5-pro",
+    llm_model: str = DEFAULT_LLM_MODEL,
     mode: str = "rag",
     k: int = 5,
     year: Optional[int] = None,
     start_year: Optional[int] = None,
     end_year: Optional[int] = None,
 ) -> dict:
-    where_filter = _build_filter(year=year, start_year=start_year, end_year=end_year)
+    expr = _build_filter(year=year, start_year=start_year, end_year=end_year)
 
     search_kwargs: Dict[str, Any] = {"k": k}
-    if where_filter:
-        search_kwargs["filter"] = where_filter
+    if expr:
+        search_kwargs["expr"] = expr
 
     retriever = vector_store.as_retriever(search_kwargs=search_kwargs)
     docs = retriever.invoke(query)
@@ -70,7 +78,12 @@ def answer_question(
             ),
         ]
     )
-    llm = ChatGoogleGenerativeAI(model=llm_model, temperature=0.1)
+    llm = ChatNVIDIA(
+        model=llm_model,
+        temperature=0.6,
+        top_p=0.9,
+        max_tokens=4096,
+    )
     rag_chain = rag_prompt | llm | StrOutputParser()
     answer = rag_chain.invoke({"question": query, "context": context or ""})
 

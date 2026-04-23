@@ -14,12 +14,16 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+.python-version
 
 # Chroma / vector db persistence
 chroma_db/
 *.db
 *.sqlite
 *.sqlite3
+
+# Milvus / docker volumes
+volumes/
 
 # IDE / OS
 .vscode/
@@ -28,6 +32,9 @@ chroma_db/
 # test / notebook caches
 .pytest_cache/
 .ipynb_checkpoints/
+
+# retrieval test artifacts
+vec.json
 
 # packaging
 *.egg-info/
