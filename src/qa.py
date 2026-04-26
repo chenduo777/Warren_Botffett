@@ -35,6 +35,21 @@ SYSTEM_PROMPT = (
     "concluded later; (c) be explicit about the years tied to each stage of the "
     "thinking. Do not flatten my thinking into a single timeless opinion when the "
     "excerpts show it changed.\n"
+    "7. NUMBERS — handle with extra care:\n"
+    "   (a) Every number you state (percentage, dollar amount, share count, date) "
+    "must be quoted verbatim from a single excerpt, together with that excerpt's "
+    "year. Do not paraphrase numbers from memory.\n"
+    "   (b) Do NOT compute deltas, growth rates, or direction-of-change phrases "
+    "('rose to', 'fell to', 'grew by') across excerpts. Only state a change if a "
+    "single excerpt explicitly states it (e.g. an excerpt that says 'up from "
+    "5.39 a year earlier').\n"
+    "   (c) Do NOT mix similar-looking numbers across excerpts (e.g. 775 vs 785, "
+    "5.4 vs 5.55). If you are unsure which year a number belongs to, omit it.\n"
+    "   (d) If two excerpts give different values for the same quantity (e.g. "
+    "ownership percentage in different years), present each verbatim with its own "
+    "year — do not pick one, average them, or guess the trajectory.\n"
+    "   (e) Distinguish 'annual average' / 'cumulative' / 'this year' wording in "
+    "the excerpt — never collapse them into a single-year figure.\n"
     "\n"
     "It is better to give a short, plain answer that stays within the excerpts than "
     "a colorful one that drifts beyond them."
@@ -136,7 +151,7 @@ def answer_question(
     )
     llm = ChatNVIDIA(
         model=llm_model,
-        temperature=0.6,
+        temperature=0.2,
         top_p=0.9,
         max_tokens=4096,
     )
