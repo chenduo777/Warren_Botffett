@@ -10,6 +10,27 @@ from pymilvus import MilvusClient, connections, utility
 
 from src.ingest import looks_like_table_dump
 
+# langchain-milvus 0.3.x reads MilvusClient._using as its ORM alias but never
+# registers it in pymilvus.connections, so any code path that touches an
+# *existing* collection (load_vector_store, similarity_search after reuse)
+# blows up in the constructor before our post-hoc connect() can run. Patch
+# MilvusClient.__init__ once so every client also registers its alias.
+_PATCHED_FLAG = "_lc_alias_patched"
+if not getattr(MilvusClient, _PATCHED_FLAG, False):
+    _orig_mc_init = MilvusClient.__init__
+
+    def _mc_init_with_alias(self, uri: str = "http://localhost:19530", **kwargs):
+        _orig_mc_init(self, uri=uri, **kwargs)
+        alias = self._using
+        if alias not in [a for a, _ in connections.list_connections()]:
+            connections.connect(alias=alias, uri=uri, **{
+                k: v for k, v in kwargs.items()
+                if k in ("user", "password", "token", "secure", "db_name")
+            })
+
+    MilvusClient.__init__ = _mc_init_with_alias
+    setattr(MilvusClient, _PATCHED_FLAG, True)
+
 DEFAULT_SEPARATORS = ["\n\n", "\n", ". ", ".", " ", ""]
 DEFAULT_MILVUS_URI = "http://localhost:19530"
 DEFAULT_COLLECTION_NAME = "buffett_letters"
@@ -19,7 +40,7 @@ DEFAULT_EMBEDDING_MODEL = "nvidia/llama-3.2-nemoretriever-300m-embed-v1"
 def split_documents(
     documents: List[Document],
     chunk_size: int = 3500,
-    chunk_overlap: int = 500,
+    chunk_overlap: int = 0,
     drop_table_chunks: bool = True,
 ) -> List[Document]:
     """Split documents with sentence-priority separators for one-line letters.
@@ -61,22 +82,15 @@ def collection_exists(uri: str, collection_name: str) -> bool:
 def _make_vector_store(
     uri: str, collection_name: str, embedding_model: str
 ) -> Milvus:
-    """Build a Milvus wrapper with its internal alias registered in pymilvus connections.
-
-    Works around a bug in langchain-milvus 0.3.x where `self.alias` comes from
-    MilvusClient._using but is never added to the ORM-style `connections` pool,
-    causing `Collection(name, using=alias)` to fail.
-    """
+    """Build a Milvus wrapper. Alias registration is handled by the
+    MilvusClient.__init__ patch at module top."""
     embeddings = NVIDIAEmbeddings(model=embedding_model, truncate="NONE")
-    vs = Milvus(
+    return Milvus(
         embedding_function=embeddings,
         collection_name=collection_name,
         connection_args={"uri": uri},
         auto_id=True,
     )
-    if vs.alias not in connections.list_connections():
-        connections.connect(alias=vs.alias, uri=uri)
-    return vs
 
 
 def build_vector_store(

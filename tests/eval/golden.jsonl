@@ -1,0 +1,5 @@
+{"id": "dot-com-warning", "question": "巴菲特對網路泡沫和科技股的看法為何？", "intent": "Discusses the dot-com bubble, Buffett's skepticism of tech/internet valuations, or his circle-of-competence reasoning for avoiding them."}
+{"id": "ebitda-criticism", "question": "為什麼巴菲特反對用 EBITDA 評估公司？", "intent": "Criticizes EBITDA as a misleading metric — e.g. that depreciation is a real cost, or that managers use it to hide capital intensity."}
+{"id": "intrinsic-value", "question": "巴菲特如何定義內在價值（intrinsic value）？", "intent": "Defines or explains intrinsic value — discounted future cash flows, the difference from book value, or its role in investing decisions."}
+{"id": "buyback-policy", "question": "波克夏在什麼條件下會回購自家股票？", "intent": "Explains Berkshire's share repurchase policy, the intrinsic-value-based trigger, or Buffett's views on buybacks as capital allocation."}
+{"id": "compounding", "question": "巴菲特如何說明複利的威力？", "intent": "Illustrates compounding — long holding periods, reinvested earnings, the power of small edges over time, or illustrative math examples."}
