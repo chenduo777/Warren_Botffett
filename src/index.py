@@ -39,7 +39,7 @@ DEFAULT_EMBEDDING_MODEL = "nvidia/llama-3.2-nemoretriever-300m-embed-v1"
 
 def split_documents(
     documents: List[Document],
-    chunk_size: int = 3500,
+    chunk_size: int = 1500,
     chunk_overlap: int = 0,
     drop_table_chunks: bool = True,
 ) -> List[Document]:

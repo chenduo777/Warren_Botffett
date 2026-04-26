@@ -58,3 +58,22 @@ def test_keeps_text_with_one_inline_figure():
         "is meaningless from an economic standpoint."
     )
     assert not looks_like_table_dump(text)
+
+
+def test_flags_mixed_table_head_with_narrative_tail():
+    """Holdings tables often end with a narrative paragraph; the chunk
+    must still be flagged. Reproduces the 2009/2013/2017 tech-stocks
+    failure where mixed chunks displaced real narrative from top-K."""
+    table_head = (
+        "Johnson Johnson . . 1.0 1 724 1 838 130 272 500 "
+        "Kraft Foods Inc. . . 8.8 4 330 3 541 3 947 554 "
+        "POSCO . . 5.2 768 2 092 83 128 411 "
+        "The Procter Gamble Company . . 2.9 533 5 040 25 108 967 "
+        "Wal Mart Stores Inc. . . 1.0 1 893 2 087 334 235 585"
+    )
+    narrative_tail = (
+        " Charlie and I view the marketable common stocks that Berkshire "
+        "owns as interests in businesses, not as ticker symbols to be "
+        "bought or sold based on chart patterns or analyst targets."
+    )
+    assert looks_like_table_dump(table_head + narrative_tail)
