@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 
 from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage
 
 from src.index import (
     DEFAULT_COLLECTION_NAME,
@@ -13,7 +15,7 @@ from src.index import (
     collection_exists,
     load_vector_store,
 )
-from src.qa import DEFAULT_LLM_MODEL, DEFAULT_RERANK_MODEL, answer_question
+from src.qa import DEFAULT_LLM_MODEL, DEFAULT_RERANK_MODEL, build_chat_graph
 
 
 def _configure_api_key() -> None:
@@ -25,8 +27,10 @@ def _configure_api_key() -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Warren Botffett RAG CLI (query only)")
-    parser.add_argument("--query", required=True, help="Question to ask")
+    parser = argparse.ArgumentParser(
+        description="Warren Botffett RAG CLI — single-shot (--query) or REPL (no --query)."
+    )
+    parser.add_argument("--query", help="Single-shot question. Omit to enter REPL mode.")
     parser.add_argument("--k", type=int, default=5, help="Top-K chunks to retrieve")
     parser.add_argument("--milvus-uri", default=DEFAULT_MILVUS_URI)
     parser.add_argument("--collection-name", default=DEFAULT_COLLECTION_NAME)
@@ -52,6 +56,58 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _print_result(result, verbose: bool) -> None:
+    if verbose:
+        rewritten = result.get("retrieval_query", "")
+        if rewritten:
+            print(f"\n=== Retrieval Query (rewritten) ===\n{rewritten}")
+        print("\n=== Retrieved Chunks ===")
+        for i, doc in enumerate(result.get("retrieved_docs", []), start=1):
+            year = doc.metadata.get("year", "?")
+            print(f"\n--- [{i}] year={year} ---")
+            print(doc.page_content)
+
+    print("\n=== Answer ===")
+    print(result["messages"][-1].content)
+    years = result.get("retrieved_years", [])
+    print("\n=== Retrieved Years ===")
+    print(", ".join(str(y) for y in years) if years else "(none)")
+
+
+def _invoke(graph, thread_id: str, user_input: str):
+    config = {"configurable": {"thread_id": thread_id}}
+    return graph.invoke({"messages": [HumanMessage(content=user_input)]}, config)
+
+
+def run_repl(graph, verbose: bool) -> None:
+    thread_id = "default"
+    print(
+        "Buffett RAG REPL.\n"
+        "  /new   - start a fresh thread (forgets prior turns)\n"
+        "  /quit  - exit (Ctrl-D also works)\n"
+    )
+    while True:
+        try:
+            line = input(f"\n[thread={thread_id}] >>> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not line:
+            continue
+        if line in ("/quit", "/exit"):
+            break
+        if line == "/new":
+            thread_id = f"thread-{int(time.time())}"
+            print(f"Started new thread: {thread_id}")
+            continue
+        try:
+            result = _invoke(graph, thread_id, line)
+        except Exception as e:
+            print(f"Error: {e}")
+            continue
+        _print_result(result, verbose)
+
+
 def main() -> None:
     args = parse_args()
     _configure_api_key()
@@ -71,9 +127,8 @@ def main() -> None:
         embedding_model=args.embedding_model,
     )
 
-    result = answer_question(
+    graph = build_chat_graph(
         vector_store=vector_store,
-        query=args.query,
         llm_model=args.llm_model,
         k=args.k,
         year=args.year,
@@ -83,17 +138,11 @@ def main() -> None:
         rerank_model=args.rerank_model,
     )
 
-    if args.verbose:
-        print("\n=== Retrieved Chunks ===")
-        for i, doc in enumerate(result["retrieved_docs"], start=1):
-            year = doc.metadata.get("year", "?")
-            print(f"\n--- [{i}] year={year} ---")
-            print(doc.page_content)
-
-    print("\n=== Answer ===")
-    print(result["answer"])
-    print("\n=== Retrieved Years ===")
-    print(", ".join(str(y) for y in result["years"]) if result["years"] else "(none)")
+    if args.query:
+        result = _invoke(graph, "oneshot", args.query)
+        _print_result(result, args.verbose)
+    else:
+        run_repl(graph, args.verbose)
 
 
 if __name__ == "__main__":

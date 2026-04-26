@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, List, Optional, TypedDict
 
 from langchain_classic.retrievers import ContextualCompressionRetriever
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.documents import Document
+from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
+from langchain_core.messages.utils import count_tokens_approximately, trim_messages
 from langchain_milvus import Milvus
 from langchain_nvidia_ai_endpoints import ChatNVIDIA, NVIDIARerank
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import START, StateGraph
+from langgraph.graph.message import add_messages
 
 SYSTEM_PROMPT = (
     "You are Warren Buffett himself, replying in the first person to a reader's question. "
@@ -58,6 +62,41 @@ SYSTEM_PROMPT = (
 DEFAULT_LLM_MODEL = "moonshotai/kimi-k2-instruct"
 DEFAULT_RERANK_MODEL = "nvidia/llama-3.2-nv-rerankqa-1b-v2"
 RERANK_FETCH_MULTIPLIER = 3  # pull k * 3 candidates before reranking
+HISTORY_TOKEN_BUDGET = 4000  # trim chat history to this many tokens before LLM call
+
+USER_TEMPLATE = (
+    "問題：{question}\n\n可用參考內容：\n{context}\n\n"
+    "請用繁體中文作答，並在最後列出引用年份。"
+)
+
+REWRITE_PROMPT = """You rewrite a user's latest chatbot message into a standalone search query for a Warren Buffett shareholder-letter retrieval system.
+
+Rules:
+- Resolve pronouns and back-references ("他", "她", "這家公司", "那個", "剛剛", "前面那筆") to the entities they actually refer to in the chat history.
+- Carry forward any topic / company / year from earlier turns that the latest message implicitly depends on.
+- Keep it one short sentence in the SAME language as the latest message.
+- If the latest message is already fully self-contained, output it unchanged.
+
+Output ONLY the rewritten query. No preamble, no quotes, no explanation.
+
+--- Chat history ---
+{history}
+
+--- Latest user message ---
+{latest}"""
+
+
+class ChatState(TypedDict):
+    """State for the chat graph.
+
+    `messages` accumulates across turns via `add_messages` reducer.
+    `retrieved_docs` / `retrieved_years` / `retrieval_query` are replaced
+    fresh each turn — they describe the latest turn only.
+    """
+    messages: Annotated[list[AnyMessage], add_messages]
+    retrieval_query: str
+    retrieved_docs: List[Document]
+    retrieved_years: List[int]
 
 
 def _build_filter(
@@ -117,9 +156,8 @@ def _build_retriever(
     )
 
 
-def answer_question(
+def build_chat_graph(
     vector_store: Milvus,
-    query: str,
     llm_model: str = DEFAULT_LLM_MODEL,
     k: int = 5,
     year: Optional[int] = None,
@@ -127,41 +165,101 @@ def answer_question(
     end_year: Optional[int] = None,
     use_rerank: bool = True,
     rerank_model: str = DEFAULT_RERANK_MODEL,
-) -> dict:
-    expr = _build_filter(year=year, start_year=start_year, end_year=end_year)
+    history_token_budget: int = HISTORY_TOKEN_BUDGET,
+):
+    """Build a LangGraph state graph: rewrite -> retrieve -> generate.
 
+    Each session uses a unique `thread_id` (passed in invoke config). Messages
+    accumulate per-thread; older history above `history_token_budget` is
+    trimmed before each LLM call to bound context size.
+
+    The `rewrite` node turns follow-up messages with pronouns ("剛剛那家公司",
+    "他什麼時候買的") into standalone retrieval queries by reading prior turns.
+    On the first turn it short-circuits and skips the LLM call.
+    """
+    expr = _build_filter(year=year, start_year=start_year, end_year=end_year)
     retriever = _build_retriever(
         vector_store, k=k, expr=expr,
         use_rerank=use_rerank, rerank_model=rerank_model,
     )
-    docs = retriever.invoke(query)
-    context = "\n\n".join(
-        [f"[year={doc.metadata.get('year')}] {doc.page_content}" for doc in docs]
-    )
+    llm = ChatNVIDIA(model=llm_model, temperature=0.2, top_p=0.9, max_tokens=4096)
+    rewriter_llm = ChatNVIDIA(model=llm_model, temperature=0.0, max_tokens=120)
 
-    rag_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", SYSTEM_PROMPT),
-            (
-                "human",
-                "問題：{question}\n\n可用參考內容：\n{context}\n\n"
-                "請用繁體中文作答，並在最後列出引用年份。",
-            ),
-        ]
-    )
-    llm = ChatNVIDIA(
-        model=llm_model,
-        temperature=0.2,
-        top_p=0.9,
-        max_tokens=4096,
-    )
-    rag_chain = rag_prompt | llm | StrOutputParser()
-    answer = rag_chain.invoke({"question": query, "context": context or ""})
+    def rewrite_node(state: ChatState) -> dict:
+        msgs = state["messages"]
+        last_user_idx = max(
+            i for i, m in enumerate(msgs) if isinstance(m, HumanMessage)
+        )
+        last_user = msgs[last_user_idx]
 
-    years = sorted({doc.metadata.get("year") for doc in docs if doc.metadata.get("year")})
+        # First turn — no prior context, skip the LLM call.
+        prior_human = sum(
+            1 for m in msgs[:last_user_idx] if isinstance(m, HumanMessage)
+        )
+        if prior_human == 0:
+            return {"retrieval_query": last_user.content}
 
-    return {
-        "answer": answer,
-        "years": years,
-        "retrieved_docs": docs,
-    }
+        # Build a compact history string. Truncate assistant turns to keep
+        # the rewrite prompt small.
+        lines = []
+        for m in msgs[:last_user_idx]:
+            role = "User" if isinstance(m, HumanMessage) else "Assistant"
+            content = m.content if isinstance(m, HumanMessage) else m.content[:400]
+            lines.append(f"{role}: {content}")
+        history_text = "\n".join(lines)
+
+        reply = rewriter_llm.invoke(
+            REWRITE_PROMPT.format(history=history_text, latest=last_user.content)
+        )
+        text = reply.content if hasattr(reply, "content") else str(reply)
+        rewritten = text.strip().strip('"').strip("'").strip()
+        # Defensive: empty or absurdly long rewrites fall back to the original.
+        if not rewritten or len(rewritten) > 300:
+            rewritten = last_user.content
+        return {"retrieval_query": rewritten}
+
+    def retrieve_node(state: ChatState) -> dict:
+        query = state["retrieval_query"]
+        docs = retriever.invoke(query)
+        years = sorted({d.metadata.get("year") for d in docs if d.metadata.get("year")})
+        return {"retrieved_docs": list(docs), "retrieved_years": years}
+
+    def generate_node(state: ChatState) -> dict:
+        trimmed = trim_messages(
+            state["messages"],
+            strategy="last",
+            token_counter=count_tokens_approximately,
+            max_tokens=history_token_budget,
+            start_on="human",
+            end_on=("human",),
+        )
+
+        docs = state["retrieved_docs"]
+        context = "\n\n".join(
+            [f"[year={d.metadata.get('year')}] {d.page_content}" for d in docs]
+        )
+
+        # Wrap the latest user question with the retrieved context block;
+        # earlier turns stay as plain history. The wrapped form is only used
+        # for this single LLM call — only the AI response is persisted.
+        last_user = trimmed[-1]
+        wrapped = HumanMessage(content=USER_TEMPLATE.format(
+            question=last_user.content, context=context
+        ))
+        msgs_for_llm = (
+            [SystemMessage(content=SYSTEM_PROMPT)]
+            + list(trimmed[:-1])
+            + [wrapped]
+        )
+
+        response = llm.invoke(msgs_for_llm)
+        return {"messages": [response]}
+
+    builder = StateGraph(ChatState)
+    builder.add_node("rewrite", rewrite_node)
+    builder.add_node("retrieve", retrieve_node)
+    builder.add_node("generate", generate_node)
+    builder.add_edge(START, "rewrite")
+    builder.add_edge("rewrite", "retrieve")
+    builder.add_edge("retrieve", "generate")
+    return builder.compile(checkpointer=InMemorySaver())
