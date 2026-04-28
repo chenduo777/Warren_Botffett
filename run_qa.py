@@ -6,6 +6,9 @@ import sys
 import time
 
 from dotenv import load_dotenv
+
+load_dotenv()
+
 from langchain_core.messages import HumanMessage
 
 from src.index import (
@@ -19,7 +22,6 @@ from src.qa import DEFAULT_LLM_MODEL, DEFAULT_RERANK_MODEL, build_chat_graph
 
 
 def _configure_api_key() -> None:
-    load_dotenv()
     key = os.getenv("NVIDIA_API_KEY") or os.getenv("nvidia_api_key")
     if not key:
         raise EnvironmentError("Missing NVIDIA_API_KEY in .env")
