@@ -1,0 +1,47 @@
+# Host virtualenv — must NEVER ship into the image (664MB, wrong arch when
+# building for arm64 on x86 host)
+wbot/
+
+# Docker Compose volumes (Milvus / Postgres data)
+volumes/
+
+# Secrets — supplied at runtime via env_file:, not baked into the image
+.env
+.env.*
+!.env.example
+
+# Local Chroma DB persistence (legacy)
+chroma_db/
+
+# Git
+.git/
+.gitignore
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+.pytest_cache/
+.ipynb_checkpoints/
+*.egg-info/
+build/
+dist/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+.claude/
+CLAUDE.md
+
+# Docs / dev-only files (not needed at runtime)
+README.md
+*.md
+docker-compose.yml
+
+# Tests (not needed at runtime)
+tests/
+eval_retrieval.py
+vec.json

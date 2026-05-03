@@ -9,7 +9,7 @@ from src.bot.handlers import (
     deny_handler,
     help_command,
     make_message_handler,
-    new_command,
+    make_new_command,
     start_command,
 )
 
@@ -36,7 +36,7 @@ def run_bot(graph, token: str, allowed_user_ids: Iterable[int]) -> None:
     msg_handler = make_message_handler(graph)
 
     app.add_handler(CommandHandler("start", start_command, filters=user_filter))
-    app.add_handler(CommandHandler("new", new_command, filters=user_filter))
+    app.add_handler(CommandHandler("new", make_new_command(graph), filters=user_filter))
     app.add_handler(CommandHandler("help", help_command, filters=user_filter))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND & user_filter, msg_handler)

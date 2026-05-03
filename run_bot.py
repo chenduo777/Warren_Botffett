@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from langgraph.checkpoint.postgres import PostgresSaver
+
 from src.bot.auth import load_allowed_user_ids
 from src.bot.telegram_bot import run_bot
 from src.index import (
@@ -84,21 +86,34 @@ def main() -> None:
         )
         sys.exit(1)
 
+    postgres_url = os.getenv("POSTGRES_URL")
+    if not postgres_url:
+        raise EnvironmentError(
+            "Missing POSTGRES_URL in .env. Example:\n"
+            "  POSTGRES_URL=postgresql://bot:bot@127.0.0.1:5432/bot?sslmode=disable"
+        )
+
     vector_store = load_vector_store(
         uri=args.milvus_uri,
         collection_name=args.collection_name,
         embedding_model=args.embedding_model,
     )
 
-    graph = build_chat_graph(
-        vector_store=vector_store,
-        llm_model=args.llm_model,
-        k=args.k,
-        use_rerank=not args.no_rerank,
-        rerank_model=args.rerank_model,
-    )
+    # PostgresSaver owns a connection pool; keep it alive for the whole bot
+    # lifetime by wrapping run_bot inside the context manager.
+    with PostgresSaver.from_conn_string(postgres_url) as checkpointer:
+        checkpointer.setup()  # idempotent; creates checkpoint tables on first run
 
-    run_bot(graph, token=token, allowed_user_ids=allowed)
+        graph = build_chat_graph(
+            vector_store=vector_store,
+            llm_model=args.llm_model,
+            k=args.k,
+            use_rerank=not args.no_rerank,
+            rerank_model=args.rerank_model,
+            checkpointer=checkpointer,
+        )
+
+        run_bot(graph, token=token, allowed_user_ids=allowed)
 
 
 if __name__ == "__main__":

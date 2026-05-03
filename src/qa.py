@@ -8,6 +8,7 @@ from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
 from langchain_core.messages.utils import count_tokens_approximately, trim_messages
 from langchain_milvus import Milvus
 from langchain_nvidia_ai_endpoints import ChatNVIDIA, NVIDIARerank
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
@@ -59,14 +60,14 @@ SYSTEM_PROMPT = (
     "a colorful one that drifts beyond them."
 )
 
-DEFAULT_LLM_MODEL = "moonshotai/kimi-k2-instruct"
+DEFAULT_LLM_MODEL = "moonshotai/kimi-k2-instruct" #備用 z-ai/glm-4.7
 DEFAULT_RERANK_MODEL = "nvidia/llama-3.2-nv-rerankqa-1b-v2"
 RERANK_FETCH_MULTIPLIER = 3  # pull k * 3 candidates before reranking
 HISTORY_TOKEN_BUDGET = 4000  # trim chat history to this many tokens before LLM call
 
 USER_TEMPLATE = (
     "問題：{question}\n\n可用參考內容：\n{context}\n\n"
-    "請用繁體中文作答，並在最後列出引用年份。"
+    "請用繁體中文作答。"
 )
 
 REWRITE_PROMPT = """You rewrite a user's latest chatbot message into a standalone search query for a Warren Buffett shareholder-letter retrieval system.
@@ -166,6 +167,7 @@ def build_chat_graph(
     use_rerank: bool = True,
     rerank_model: str = DEFAULT_RERANK_MODEL,
     history_token_budget: int = HISTORY_TOKEN_BUDGET,
+    checkpointer: Optional[BaseCheckpointSaver] = None,
 ):
     """Build a LangGraph state graph: rewrite -> retrieve -> generate.
 
@@ -176,6 +178,10 @@ def build_chat_graph(
     The `rewrite` node turns follow-up messages with pronouns ("剛剛那家公司",
     "他什麼時候買的") into standalone retrieval queries by reading prior turns.
     On the first turn it short-circuits and skips the LLM call.
+
+    If `checkpointer` is None, an in-process `InMemorySaver` is used (history
+    is lost on restart). Pass a `PostgresSaver` (already entered as a context
+    manager) to persist threads across restarts.
     """
     expr = _build_filter(year=year, start_year=start_year, end_year=end_year)
     retriever = _build_retriever(
@@ -262,4 +268,4 @@ def build_chat_graph(
     builder.add_edge(START, "rewrite")
     builder.add_edge("rewrite", "retrieve")
     builder.add_edge("retrieve", "generate")
-    return builder.compile(checkpointer=InMemorySaver())
+    return builder.compile(checkpointer=checkpointer or InMemorySaver())

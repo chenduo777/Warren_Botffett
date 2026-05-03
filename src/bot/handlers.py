@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 
 from langchain_core.messages import HumanMessage
 from telegram import Update
@@ -32,10 +31,22 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(WELCOME)
 
 
-async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    context.chat_data["thread_id"] = f"{_default_thread_id(chat_id)}-{int(time.time())}"
-    await update.message.reply_text("已開始新對話，先前的上下文已清除。")
+def make_new_command(graph):
+    """Build a /new handler that wipes this chat's checkpoint history.
+
+    Thread id is deterministic (`tg-<chat_id>`) so it survives bot restarts
+    without any extra Telegram-side persistence. /new simply deletes the
+    thread's rows from Postgres — the next message starts a fresh state.
+    """
+
+    async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat_id = update.effective_chat.id
+        thread_id = _default_thread_id(chat_id)
+        await asyncio.to_thread(graph.checkpointer.delete_thread, thread_id)
+        context.chat_data["thread_id"] = thread_id
+        await update.message.reply_text("已開始新對話，先前的上下文已清除。")
+
+    return new_command
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
