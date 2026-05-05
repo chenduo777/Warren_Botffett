@@ -60,10 +60,14 @@ SYSTEM_PROMPT = (
     "a colorful one that drifts beyond them."
 )
 
-DEFAULT_LLM_MODEL = "moonshotai/kimi-k2-instruct" #備用 z-ai/glm-4.7
+DEFAULT_LLM_MODEL = "meta/llama-4-maverick-17b-128e-instruct"  # 備用 moonshotai/kimi-k2-instruct
 DEFAULT_RERANK_MODEL = "nvidia/llama-3.2-nv-rerankqa-1b-v2"
 RERANK_FETCH_MULTIPLIER = 3  # pull k * 3 candidates before reranking
 HISTORY_TOKEN_BUDGET = 4000  # trim chat history to this many tokens before LLM call
+REWRITE_HISTORY_TURNS = 4    # rewrite_node only reads the last N turns (= 2N messages).
+                             # Older turns get dropped before being shown to the rewriter
+                             # so persistent (Postgres) history doesn't leak stale topics
+                             # into the standalone search query.
 
 USER_TEMPLATE = (
     "問題：{question}\n\n可用參考內容：\n{context}\n\n"
@@ -205,10 +209,12 @@ def build_chat_graph(
         if prior_human == 0:
             return {"retrieval_query": last_user.content}
 
-        # Build a compact history string. Truncate assistant turns to keep
-        # the rewrite prompt small.
+        # Build a compact history string. Cap to the most recent N turns so
+        # long persisted threads don't drown the rewriter in stale topics,
+        # and truncate assistant turns to keep token usage low.
+        recent = msgs[:last_user_idx][-(REWRITE_HISTORY_TURNS * 2):]
         lines = []
-        for m in msgs[:last_user_idx]:
+        for m in recent:
             role = "User" if isinstance(m, HumanMessage) else "Assistant"
             content = m.content if isinstance(m, HumanMessage) else m.content[:400]
             lines.append(f"{role}: {content}")
