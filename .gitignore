@@ -8,6 +8,8 @@
 wbot/
 .claude/
 CLAUDE.md
+.agents/
+AGENTS.md
 
 # Python artifacts
 __pycache__/
