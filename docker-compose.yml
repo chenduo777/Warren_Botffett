@@ -23,8 +23,8 @@ services:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
     ports:
-      - "9001:9001"
-      - "9000:9000"
+      - "127.0.0.1:9001:9001"
+      - "127.0.0.1:9000:9000"
     volumes:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/minio:/minio_data
     command: minio server /minio_data --console-address ":9001"
@@ -53,8 +53,8 @@ services:
       timeout: 20s
       retries: 3
     ports:
-      - "19530:19530"
-      - "9091:9091"
+      - "127.0.0.1:19530:19530"
+      - "127.0.0.1:9091:9091"
     depends_on:
       - "etcd"
       - "minio"
@@ -65,7 +65,7 @@ services:
     environment:
       MILVUS_URL: standalone:19530
     ports:
-      - "8000:3000"
+      - "127.0.0.1:8000:3000"
     depends_on:
       - "standalone"
 
@@ -88,6 +88,22 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
 
+  # One-shot init: builds the Milvus collection if it is missing, then exits.
+  # `build_index.py` is idempotent — it skips when the collection already
+  # exists, so this service is safe to run on every `docker compose up`.
+  # Use `docker compose run --rm index-init python build_index.py --force`
+  # to rebuild from scratch (e.g. after editing data/letters.txt).
+  index-init:
+    container_name: warren-bot-index-init
+    build: .
+    image: warren-bot:local
+    env_file: .env
+    command: ["python", "build_index.py", "--milvus-uri", "http://standalone:19530"]
+    depends_on:
+      standalone:
+        condition: service_healthy
+    restart: "no"
+
   bot:
     container_name: warren-bot
     build: .
@@ -103,6 +119,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      index-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 networks:

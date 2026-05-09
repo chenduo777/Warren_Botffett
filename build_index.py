@@ -11,6 +11,7 @@ from src.index import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MILVUS_URI,
     build_vector_store,
+    collection_exists,
     split_documents,
 )
 from src.ingest import load_letter_documents
@@ -41,11 +42,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--milvus-uri", default=DEFAULT_MILVUS_URI)
     parser.add_argument("--collection-name", default=DEFAULT_COLLECTION_NAME)
     parser.add_argument("--embedding-model", default=DEFAULT_EMBEDDING_MODEL)
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Drop and rebuild the collection even if it already exists. "
+             "Without this flag, the script exits 0 when the collection is present "
+             "so it is safe to wire as a one-shot init step in docker-compose.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    # Idempotent fast-path: skip embedding work entirely if the collection
+    # is already there. This lets compose run us as an `index-init` service
+    # on every `up` without re-burning embedding API credits.
+    if not args.force and collection_exists(args.milvus_uri, args.collection_name):
+        print(
+            f"Collection '{args.collection_name}' already exists at {args.milvus_uri}. "
+            f"Skipping. Pass --force to rebuild from scratch."
+        )
+        return
+
     _configure_api_key()
 
     print(f"Loading letters from {args.data_file} ...")
