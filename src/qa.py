@@ -161,6 +161,79 @@ def _build_retriever(
     )
 
 
+def make_rewrite_node(rewriter_llm):
+    """Return a rewrite_node closure bound to the given LLM."""
+    def rewrite_node(state: ChatState) -> dict:
+        msgs = state["messages"]
+        last_user_idx = max(
+            i for i, m in enumerate(msgs) if isinstance(m, HumanMessage)
+        )
+        last_user = msgs[last_user_idx]
+
+        prior_human = sum(
+            1 for m in msgs[:last_user_idx] if isinstance(m, HumanMessage)
+        )
+        if prior_human == 0:
+            return {"retrieval_query": last_user.content}
+
+        recent = msgs[:last_user_idx][-(REWRITE_HISTORY_TURNS * 2):]
+        lines = []
+        for m in recent:
+            role = "User" if isinstance(m, HumanMessage) else "Assistant"
+            content = m.content if isinstance(m, HumanMessage) else m.content[:400]
+            lines.append(f"{role}: {content}")
+        history_text = "\n".join(lines)
+
+        reply = rewriter_llm.invoke(
+            REWRITE_PROMPT.format(history=history_text, latest=last_user.content)
+        )
+        text = reply.content if hasattr(reply, "content") else str(reply)
+        rewritten = text.strip().strip('"').strip("'").strip()
+        if not rewritten or len(rewritten) > 300:
+            rewritten = last_user.content
+        return {"retrieval_query": rewritten}
+    return rewrite_node
+
+
+def make_retrieve_node(retriever):
+    """Return a retrieve_node closure bound to the given retriever."""
+    def retrieve_node(state: ChatState) -> dict:
+        query = state["retrieval_query"]
+        docs = retriever.invoke(query)
+        years = sorted({d.metadata.get("year") for d in docs if d.metadata.get("year")})
+        return {"retrieved_docs": list(docs), "retrieved_years": years}
+    return retrieve_node
+
+
+def make_generate_node(llm, history_token_budget):
+    """Return a generate_node closure bound to the given LLM and token budget."""
+    def generate_node(state: ChatState) -> dict:
+        trimmed = trim_messages(
+            state["messages"],
+            strategy="last",
+            token_counter=count_tokens_approximately,
+            max_tokens=history_token_budget,
+            start_on="human",
+            end_on=("human",),
+        )
+        docs = state["retrieved_docs"]
+        context = "\n\n".join(
+            [f"[year={d.metadata.get('year')}] {d.page_content}" for d in docs]
+        )
+        last_user = trimmed[-1]
+        wrapped = HumanMessage(content=USER_TEMPLATE.format(
+            question=last_user.content, context=context
+        ))
+        msgs_for_llm = (
+            [SystemMessage(content=SYSTEM_PROMPT)]
+            + list(trimmed[:-1])
+            + [wrapped]
+        )
+        response = llm.invoke(msgs_for_llm)
+        return {"messages": [response]}
+    return generate_node
+
+
 def build_chat_graph(
     vector_store: Milvus,
     llm_model: str = DEFAULT_LLM_MODEL,
@@ -195,77 +268,9 @@ def build_chat_graph(
     llm = ChatNVIDIA(model=llm_model, temperature=0.2, top_p=0.9, max_tokens=4096)
     rewriter_llm = ChatNVIDIA(model=llm_model, temperature=0.0, max_tokens=120)
 
-    def rewrite_node(state: ChatState) -> dict:
-        msgs = state["messages"]
-        last_user_idx = max(
-            i for i, m in enumerate(msgs) if isinstance(m, HumanMessage)
-        )
-        last_user = msgs[last_user_idx]
-
-        # First turn — no prior context, skip the LLM call.
-        prior_human = sum(
-            1 for m in msgs[:last_user_idx] if isinstance(m, HumanMessage)
-        )
-        if prior_human == 0:
-            return {"retrieval_query": last_user.content}
-
-        # Build a compact history string. Cap to the most recent N turns so
-        # long persisted threads don't drown the rewriter in stale topics,
-        # and truncate assistant turns to keep token usage low.
-        recent = msgs[:last_user_idx][-(REWRITE_HISTORY_TURNS * 2):]
-        lines = []
-        for m in recent:
-            role = "User" if isinstance(m, HumanMessage) else "Assistant"
-            content = m.content if isinstance(m, HumanMessage) else m.content[:400]
-            lines.append(f"{role}: {content}")
-        history_text = "\n".join(lines)
-
-        reply = rewriter_llm.invoke(
-            REWRITE_PROMPT.format(history=history_text, latest=last_user.content)
-        )
-        text = reply.content if hasattr(reply, "content") else str(reply)
-        rewritten = text.strip().strip('"').strip("'").strip()
-        # Defensive: empty or absurdly long rewrites fall back to the original.
-        if not rewritten or len(rewritten) > 300:
-            rewritten = last_user.content
-        return {"retrieval_query": rewritten}
-
-    def retrieve_node(state: ChatState) -> dict:
-        query = state["retrieval_query"]
-        docs = retriever.invoke(query)
-        years = sorted({d.metadata.get("year") for d in docs if d.metadata.get("year")})
-        return {"retrieved_docs": list(docs), "retrieved_years": years}
-
-    def generate_node(state: ChatState) -> dict:
-        trimmed = trim_messages(
-            state["messages"],
-            strategy="last",
-            token_counter=count_tokens_approximately,
-            max_tokens=history_token_budget,
-            start_on="human",
-            end_on=("human",),
-        )
-
-        docs = state["retrieved_docs"]
-        context = "\n\n".join(
-            [f"[year={d.metadata.get('year')}] {d.page_content}" for d in docs]
-        )
-
-        # Wrap the latest user question with the retrieved context block;
-        # earlier turns stay as plain history. The wrapped form is only used
-        # for this single LLM call — only the AI response is persisted.
-        last_user = trimmed[-1]
-        wrapped = HumanMessage(content=USER_TEMPLATE.format(
-            question=last_user.content, context=context
-        ))
-        msgs_for_llm = (
-            [SystemMessage(content=SYSTEM_PROMPT)]
-            + list(trimmed[:-1])
-            + [wrapped]
-        )
-
-        response = llm.invoke(msgs_for_llm)
-        return {"messages": [response]}
+    rewrite_node = make_rewrite_node(rewriter_llm)
+    retrieve_node = make_retrieve_node(retriever)
+    generate_node = make_generate_node(llm, history_token_budget)
 
     builder = StateGraph(ChatState)
     builder.add_node("rewrite", rewrite_node)

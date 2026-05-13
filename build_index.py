@@ -6,6 +6,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+load_dotenv()
+
+from src.env import configure_api_key
 from src.index import (
     DEFAULT_COLLECTION_NAME,
     DEFAULT_EMBEDDING_MODEL,
@@ -20,18 +23,6 @@ ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA_FILE = ROOT / "data" / "letters.txt"
 
 
-def _configure_api_key() -> None:
-    load_dotenv()
-    nvidia_api_key = (
-        os.getenv("NVIDIA_API_KEY")
-        or os.getenv("nvidia_api_key")
-        or os.getenv("nvidia_kimi_api_key")
-    )
-    if not nvidia_api_key:
-        raise EnvironmentError(
-            "Missing API key. Set NVIDIA_API_KEY (or nvidia_kimi_api_key) in .env"
-        )
-    os.environ["NVIDIA_API_KEY"] = nvidia_api_key
 
 
 def parse_args() -> argparse.Namespace:
@@ -65,7 +56,7 @@ def main() -> None:
         )
         return
 
-    _configure_api_key()
+    configure_api_key()
 
     print(f"Loading letters from {args.data_file} ...")
     docs = load_letter_documents(args.data_file)
