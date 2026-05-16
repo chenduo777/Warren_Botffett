@@ -67,7 +67,7 @@ def build_agent_graph(
     helper_llm = ChatNVIDIA(
         model=DEFAULT_HELPER_LLM_MODEL,
         temperature=0.0,
-        max_tokens=200,
+        max_completion_tokens=200,
     )
 
     def enrich_node(state: AgentState) -> dict:
@@ -75,8 +75,8 @@ def build_agent_graph(
         last_user = next(m for m in reversed(msgs) if isinstance(m, HumanMessage))
         retrieval_query, company_context = enrich_query(
             str(last_user.content),
-            helper_llm,
-            helper_llm,
+            helper_llm,   # extractor: llama-3.1-70b (fast, simple)
+            llm,           # translator: maverick (knowledge-rich CoT)
         )
         update = {"retrieval_query": retrieval_query}
         if company_context:
