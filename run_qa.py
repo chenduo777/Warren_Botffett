@@ -18,14 +18,9 @@ from src.index import (
     collection_exists,
     load_vector_store,
 )
-from src.qa import DEFAULT_LLM_MODEL, DEFAULT_RERANK_MODEL, build_chat_graph
-
-
-def _configure_api_key() -> None:
-    key = os.getenv("NVIDIA_API_KEY") or os.getenv("nvidia_api_key")
-    if not key:
-        raise EnvironmentError("Missing NVIDIA_API_KEY in .env")
-    os.environ["NVIDIA_API_KEY"] = key
+from src.agent import DEFAULT_AGENT_LLM_MODEL as DEFAULT_LLM_MODEL, build_agent_graph as build_chat_graph
+from src.env import configure_api_key
+from src.qa import DEFAULT_RERANK_MODEL
 
 
 def parse_args() -> argparse.Namespace:
@@ -112,7 +107,7 @@ def run_repl(graph, verbose: bool) -> None:
 
 def main() -> None:
     args = parse_args()
-    _configure_api_key()
+    configure_api_key()
 
     if not collection_exists(args.milvus_uri, args.collection_name):
         print(

@@ -6,7 +6,7 @@ from langchain_core.documents import Document
 from langchain_milvus import Milvus
 from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from pymilvus import MilvusClient, connections, utility
+from pymilvus import MilvusClient, connections
 
 from src.ingest import looks_like_table_dump
 
