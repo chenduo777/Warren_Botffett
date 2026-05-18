@@ -34,7 +34,7 @@ if not getattr(MilvusClient, _PATCHED_FLAG, False):
 DEFAULT_SEPARATORS = ["\n\n", "\n", ". ", ".", " ", ""]
 DEFAULT_MILVUS_URI = "http://localhost:19530"
 DEFAULT_COLLECTION_NAME = "buffett_letters"
-DEFAULT_EMBEDDING_MODEL = "nvidia/llama-3.2-nemoretriever-300m-embed-v1"
+DEFAULT_EMBEDDING_MODEL = "nvidia/nv-embedqa-e5-v5"
 
 
 def split_documents(

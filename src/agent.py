@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import List, Optional
 
 from langchain_core.documents import Document
@@ -69,14 +70,22 @@ def build_agent_graph(
         temperature=0.0,
         max_completion_tokens=200,
     )
+    # Maverick doesn't expose tool_calls in langchain-nvidia-ai-endpoints;
+    # llama-3.1-70b properly returns structured tool_calls.
+    enricher_llm = ChatNVIDIA(
+        model=DEFAULT_HELPER_LLM_MODEL,
+        temperature=0.2,
+    )
 
     def enrich_node(state: AgentState) -> dict:
         msgs = state["messages"]
         last_user = next(m for m in reversed(msgs) if isinstance(m, HumanMessage))
         retrieval_query, company_context = enrich_query(
             str(last_user.content),
-            helper_llm,   # extractor: llama-3.1-70b (fast, simple)
-            llm,           # translator: maverick (knowledge-rich CoT)
+            helper_llm,      # extractor: llama-3.1-70b (fast, 200 tokens)
+            enricher_llm,    # agent: llama-3.1-70b (tool-capable, full budget)
+            translator_llm=llm,  # maverick: Buffett-vocabulary query generation
+            tavily_api_key=os.environ.get('TAVILY_API_KEY'),
         )
         update = {"retrieval_query": retrieval_query}
         if company_context:
